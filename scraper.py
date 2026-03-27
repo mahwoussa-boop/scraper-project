@@ -1,9 +1,10 @@
 """
-Async competitor sitemap scraper — يقرأ روابط Sitemap من data/competitors_list.json
-ويُخرج data/competitors_latest.csv
-
-استخراج JSON-LD أولاً (Salla / Zid) ثم وسوم meta — أقل اعتماداً على CSS.
-v26.1: إضافة sitemap_resolve لضمان العثور على روابط Sitemap صالحة.
+Async competitor sitemap scraper v27.0
+═══════════════════════════════════════
+✅ v27: تنظيف السعر ليصبح float + تنظيف النصوص من المسافات الزائدة
+✅ استخراج: اسم المنتج، السعر، الماركة، رابط الصورة، رابط المنتج
+✅ JSON-LD أولاً (Salla / Zid) ثم وسوم meta
+✅ sitemap_resolve لضمان العثور على روابط Sitemap صالحة
 """
 from __future__ import annotations
 
@@ -100,7 +101,48 @@ def resolve_store_to_sitemap_url(user_input: str) -> Tuple[Optional[str], str]:
         if _probe_sitemap_url(u): return u, f"تم الاستنتاج تلقائياً: `{u}`"
     return None, "لم يُعثر على Sitemap صالح."
 
-# ── Scraper logic ──────────────────────────
+
+# ══════════════════════════════════════════════
+#  v27: دوال تنظيف البيانات المحسّنة
+# ══════════════════════════════════════════════
+
+def _clean_price(val) -> Optional[float]:
+    """تنظيف السعر ليصبح float — يدعم أرقام عربية وصيغ متعددة"""
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        p = float(val)
+        return p if p > 0 else None
+    s = str(val).strip()
+    if not s:
+        return None
+    # إزالة رمز العملة والنصوص
+    s = re.sub(r'[^\d.,٠-٩]', '', s)
+    # تحويل أرقام عربية
+    _AR_DIGITS = {'٠':'0','١':'1','٢':'2','٣':'3','٤':'4','٥':'5','٦':'6','٧':'7','٨':'8','٩':'9'}
+    for ar, en in _AR_DIGITS.items():
+        s = s.replace(ar, en)
+    s = s.replace(',', '')
+    try:
+        p = float(s)
+        return p if p > 0 else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _clean_text(val) -> str:
+    """تنظيف النص من المسافات الزائدة والأحرف غير المرئية"""
+    if val is None:
+        return ""
+    s = str(val).strip()
+    # إزالة الأحرف غير المرئية
+    s = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', s)
+    # توحيد المسافات
+    s = re.sub(r'\s+', ' ', s)
+    return s.strip()
+
+
+# ── Scraper helper functions ──────────────────────────
 
 def _write_scraper_last_run_meta(payload: Dict[str, Any]) -> None:
     os.makedirs("data", exist_ok=True)
@@ -120,18 +162,44 @@ def _merge_scraper_progress(updates: Dict[str, Any]) -> None:
         json.dump(prev, f, ensure_ascii=False, indent=2)
 
 def _save_competitor_csv_rows(rows: List[Dict[str, Any]]) -> int:
-    if not rows: return 0
+    """حفظ منتجات المنافسين في CSV مع تنظيف شامل"""
+    if not rows:
+        return 0
+    # ── v27: تنظيف كل صف قبل الحفظ ──
+    clean_rows = []
+    for r in rows:
+        name = _clean_text(r.get("name", ""))
+        price = _clean_price(r.get("price"))
+        if not name or price is None:
+            continue
+        clean_rows.append({
+            "name":      name,
+            "price":     round(price, 2),
+            "brand":     _clean_text(r.get("brand", "")),
+            "image_url": _clean_text(r.get("image_url", "")),
+            "comp_url":  _clean_text(r.get("comp_url", "")),
+            "sku":       _clean_text(r.get("sku", "")),
+        })
+    if not clean_rows:
+        return 0
+
     _col_order = ["name", "price", "brand", "image_url", "comp_url", "sku"]
-    df = pd.DataFrame(rows).drop_duplicates(subset=["comp_url"])
+    df = pd.DataFrame(clean_rows).drop_duplicates(subset=["comp_url"])
     for c in _col_order:
-        if c not in df.columns: df[c] = ""
+        if c not in df.columns:
+            df[c] = ""
     df = df[_col_order]
     os.makedirs("data", exist_ok=True)
     temp_file = "data/competitors_temp.csv"
     final_file = "data/competitors_latest.csv"
+    # ── v27: أعمدة عربية واضحة مع "اسم المنتج" بدل "الاسم" ──
     df_ar = df.rename(columns={
-        "name": "الاسم", "price": "السعر", "brand": "الماركة",
-        "image_url": "رابط_الصورة", "comp_url": "رابط_المنتج", "sku": "sku",
+        "name": "اسم المنتج",
+        "price": "السعر",
+        "brand": "الماركة",
+        "image_url": "رابط_الصورة",
+        "comp_url": "رابط_المنتج",
+        "sku": "sku",
     })
     df_ar.to_csv(temp_file, index=False, encoding="utf-8-sig")
     shutil.move(temp_file, final_file)
@@ -180,21 +248,18 @@ def _filter_salla_like_product_urls(urls: List[str]) -> List[str]:
     return list(dict.fromkeys(out))
 
 def _parse_price_from_text(text: str) -> Optional[float]:
-    if not text: return None
-    t = re.sub(r"[^\d.,]", "", str(text).replace(",", ""))
-    try: return float(t)
-    except: return None
+    """تحليل السعر من نص — v27 محسّن"""
+    return _clean_price(text)
 
 def _price_from_offers(offers: Any) -> Optional[float]:
     if offers is None: return None
     if isinstance(offers, list):
         if not offers: return None
         offers = offers[0]
-    if not isinstance(offers, dict): return _parse_price_from_text(str(offers))
+    if not isinstance(offers, dict): return _clean_price(offers)
     p = offers.get("price") or offers.get("lowPrice") or offers.get("highPrice")
     if p is None: return None
-    if isinstance(p, (int, float)): return float(p)
-    return _parse_price_from_text(str(p))
+    return _clean_price(p)
 
 def _is_product_type(t: Any) -> bool:
     if isinstance(t, list): return any(x in ("Product", "ProductGroup") for x in t)
@@ -216,6 +281,7 @@ def _first_product_node(obj: Any) -> Optional[dict]:
                 if found: return found
     return None
 
+
 class AsyncCompetitorScraper:
     def __init__(self, concurrency_limit: int = 15):
         self.concurrency_limit = max(1, int(concurrency_limit))
@@ -224,7 +290,7 @@ class AsyncCompetitorScraper:
     def _get_headers(self, referer: Optional[str] = None) -> Dict[str, str]:
         return {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Accept-Language": "ar-SA,ar;q=0.9,en-US;q=0.8,en;q=0.7",
             "Accept-Encoding": "gzip, deflate",
             "Referer": referer or "https://www.google.com/",
@@ -257,38 +323,58 @@ class AsyncCompetitorScraper:
         return list(dict.fromkeys(collected)), diag
 
     async def fetch_product(self, session: aiohttp.ClientSession, url: str) -> Optional[Dict[str, Any]]:
+        """كشط منتج واحد — v27: تنظيف شامل للسعر والنصوص"""
         async with self.semaphore:
             try:
                 async with session.get(url, timeout=30, headers=self._get_headers(url)) as resp:
                     if resp.status != 200: return None
                     html = await resp.text()
                     soup = BeautifulSoup(html, "html.parser")
+
+                    # ── 1. JSON-LD (المصدر الأساسي — Salla/Zid) ──
                     for script in soup.find_all("script", type="application/ld+json"):
                         try:
                             node = _first_product_node(json.loads(script.string))
                             if node:
-                                name = node.get("name")
-                                price = _price_from_offers(node.get("offers"))
-                                if name and price:
+                                raw_name = node.get("name")
+                                raw_price = _price_from_offers(node.get("offers"))
+                                if raw_name and raw_price:
+                                    # v27: تنظيف فوري
+                                    name = _clean_text(raw_name)
+                                    price = _clean_price(raw_price)
+                                    if not name or price is None or price <= 0:
+                                        continue
                                     return {
-                                        "name": str(name).strip(), "price": price,
-                                        "brand": _extract_brand_from_product(node),
-                                        "image_url": _extract_image_url_from_product(node),
-                                        "comp_url": url, "sku": node.get("sku") or _stable_sku_from_url(url),
+                                        "name":      name,
+                                        "price":     round(price, 2),
+                                        "brand":     _clean_text(_extract_brand_from_product(node)),
+                                        "image_url": _clean_text(_extract_image_url_from_product(node)),
+                                        "comp_url":  url,
+                                        "sku":       _clean_text(node.get("sku") or _stable_sku_from_url(url)),
                                     }
                         except: continue
-                    # Fallback Meta
+
+                    # ── 2. Fallback: Meta tags ──
                     name_meta = soup.find("meta", property="og:title") or soup.find("title")
                     price_meta = soup.find("meta", property="product:price:amount") or soup.find("meta", property="og:price:amount")
                     if name_meta and price_meta:
                         name_text = name_meta.get("content") if hasattr(name_meta, "get") else name_meta.string
-                        return {
-                            "name": str(name_text).strip(), "price": _parse_price_from_text(price_meta.get("content")),
-                            "brand": "", "image_url": (soup.find("meta", property="og:image") or {}).get("content", ""),
-                            "comp_url": url, "sku": _stable_sku_from_url(url),
-                        }
+                        raw_price = price_meta.get("content") if hasattr(price_meta, "get") else None
+                        name = _clean_text(name_text)
+                        price = _clean_price(raw_price)
+                        if name and price and price > 0:
+                            img_meta = soup.find("meta", property="og:image")
+                            return {
+                                "name":      name,
+                                "price":     round(price, 2),
+                                "brand":     "",
+                                "image_url": _clean_text(img_meta.get("content", "") if img_meta else ""),
+                                "comp_url":  url,
+                                "sku":       _stable_sku_from_url(url),
+                            }
             except: pass
             return None
+
 
 async def run_scraper(sitemap_urls: List[str], progress_callback=None):
     all_rows = []
@@ -297,20 +383,19 @@ async def run_scraper(sitemap_urls: List[str], progress_callback=None):
         all_product_urls = []
         for s_url in sitemap_urls:
             if progress_callback: progress_callback(f"جاري فحص: {s_url}...", 0.05)
-            # Resolve URL first
             resolved_url, _ = resolve_store_to_sitemap_url(s_url)
             target = resolved_url or s_url
             urls, _ = await scraper.scan_sitemap(session, target)
             all_product_urls.extend(_filter_salla_like_product_urls(urls))
-        
+
         all_product_urls = list(dict.fromkeys(all_product_urls))
         total = len(all_product_urls)
         if total == 0: return 0
-        
+
         for i, url in enumerate(all_product_urls):
             res = await scraper.fetch_product(session, url)
             if res: all_rows.append(res)
             if progress_callback and i % 5 == 0:
                 progress_callback(f"تم كشط {len(all_rows)} منتج من {total}...", 0.1 + (0.8 * (i/total)))
-                
+
     return _save_competitor_csv_rows(all_rows)
