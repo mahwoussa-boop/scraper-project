@@ -22,6 +22,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse, urlunparse
 import random
 
+# إنشاء مجلد البيانات إذا لم يكن موجوداً قبل استيراد أي مكتبات أو تعريف مسارات
+os.makedirs("data", exist_ok=True)
+
 import aiohttp
 import requests
 import pandas as pd

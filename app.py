@@ -84,6 +84,9 @@ for k, v in _defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
+# إنشاء المجلدات المطلوبة إذا لم تكن موجودة
+os.makedirs("data", exist_ok=True)
+
 # تحميل المنتجات المخفية
 _db_hidden = get_hidden_product_keys()
 st.session_state.hidden_products = st.session_state.hidden_products | _db_hidden
