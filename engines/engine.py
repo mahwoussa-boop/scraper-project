@@ -302,12 +302,18 @@ def normalize_name(text):
 normalize_aggressive = normalize_name
 
 def extract_size(text):
+    """استخراج الحجم بدقة (ml, g, oz) مع دعم الصيغ العربية والإنجليزية"""
     if not isinstance(text, str): return 0.0
     tl = text.lower()
-    oz = re.findall(r'(\d+(?:\.\d+)?)\s*(?:oz|ounce)', tl)
-    if oz: return float(oz[0]) * 29.5735
-    ml = re.findall(r'(\d+(?:\.\d+)?)\s*(?:ml|مل|ملي|milliliter)', tl)
-    return float(ml[0]) if ml else 0.0
+    # دعم الـ Oz
+    oz = re.findall(r'(\d+(?:\.\d+)?)\s*(?:oz|ounce|أونصة)', tl)
+    if oz: return round(float(oz[0]) * 29.5735, 1)
+    # دعم الـ ML والجرام
+    ml = re.findall(r'(\d+(?:\.\d+)?)\s*(?:ml|مل|ملي|milliliter|g|جم|gram)', tl)
+    if ml: return float(ml[0])
+    # دعم الحجم الملتصق بالرقم مثل 100ML
+    ml_stick = re.findall(r'(\d+)(?:ml|مل)', tl)
+    return float(ml_stick[0]) if ml_stick else 0.0
 
 def extract_brand(text):
     if not isinstance(text, str): return ""
@@ -326,11 +332,15 @@ def extract_brand(text):
     return ""
 
 def extract_type(text):
+    """استخراج نوع المنتج (EDP, EDT, Parfum, Intense, Tester)"""
     if not isinstance(text, str): return ""
-    n = normalize(text)
-    if "edp" in n or "extrait" in n: return "EDP"
-    if "edt" in n: return "EDT"
-    if "edc" in n: return "EDC"
+    n = normalize(text).upper()
+    if "TESTER" in n or "تستر" in n: return "Tester"
+    if "EDP" in n or "EAU DE PARFUM" in n or "EXTRAIT" in n or "أو دو بارفيوم" in n: return "EDP"
+    if "EDT" in n or "EAU DE TOILETTE" in n or "أو دو تواليت" in n: return "EDT"
+    if "PARFUM" in n or "بارفيوم" in n: return "Parfum"
+    if "INTENSE" in n or "إنتنس" in n: return "Intense"
+    if "EDC" in n or "EAU DE COLOGNE" in n: return "EDC"
     return ""
 
 def extract_gender(text):

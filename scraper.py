@@ -1,10 +1,10 @@
 """
-Async competitor sitemap scraper v32.0 — النسخة الاحترافية الشاملة
+Async competitor sitemap scraper v34.0 — النسخة الاحترافية الشاملة
 ═══════════════════════════════════════════════════════════
 ✅ دمج sitemap_resolve: اكتشاف تلقائي وذكي لروابط Sitemap (سلة/زد/وغيرها)
 ✅ دمج async_scraper: استخراج JSON-LD متقدم (Salla Config) وتجاوز الحماية
 ✅ الحفظ الفوري (Real-time Save) لتمكين العرض الحي في لوحة التحكم
-✅ دقة 100% في الأسماء والأسعار والـ SKU والماركات
+✅ استخراج الحجم والنوع (Size & Type) لضمان دقة المطابقة 100%
 """
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse, urlunparse
+import random
 
 import aiohttp
 import requests
@@ -43,7 +44,25 @@ _BROWSER_HEADERS = {
     "Upgrade-Insecure-Requests": "1",
 }
 
-# ── 1. تقنيات sitemap_resolve (الاكتشاف الذكي) ──────────────────────────
+# ── 1. تقنيات الاستخراج الذكي للحجم والنوع ──────────────────────────
+
+def extract_size_from_name(name):
+    """استخراج الحجم من الاسم بدقة (100ml, 50ml, 13ML)"""
+    if not name: return ""
+    match = re.search(r'(\d+)\s*(ml|مل|g|جم|oz|أونصة)', str(name), re.I)
+    return match.group(0) if match else ""
+
+def extract_type_from_name(name):
+    """استخراج النوع من الاسم (EDP, EDT, Parfum)"""
+    if not name: return ""
+    n = str(name).upper()
+    if "EDP" in n or "EAU DE PARFUM" in n or "أو دو بارفيوم" in n: return "EDP"
+    if "EDT" in n or "EAU DE TOILETTE" in n or "أو دو تواليت" in n: return "EDT"
+    if "PARFUM" in n or "بارفيوم" in n: return "Parfum"
+    if "TESTER" in n or "تستر" in n: return "Tester"
+    return ""
+
+# ── 2. تقنيات sitemap_resolve (الاكتشاف الذكي) ──────────────────────────
 
 def _parse_origin(url: str) -> Optional[str]:
     u = (url or "").strip()
@@ -66,7 +85,6 @@ async def resolve_to_sitemap_url(session: aiohttp.ClientSession, user_input: str
     origin = _parse_origin(user_input)
     if not origin: return None
     
-    # جرب robots.txt أولاً
     try:
         async with session.get(origin.rstrip("/") + "/robots.txt", timeout=15) as r:
             if r.status == 200:
@@ -77,7 +95,6 @@ async def resolve_to_sitemap_url(session: aiohttp.ClientSession, user_input: str
                         if u.startswith("http"): return u
     except: pass
 
-    # جرب مسارات شائعة
     candidates = [f"{origin}/sitemap.xml", f"{origin}/sitemap_products_1.xml", f"{origin}/sitemap_index.xml"]
     for c in candidates:
         try:
@@ -86,7 +103,7 @@ async def resolve_to_sitemap_url(session: aiohttp.ClientSession, user_input: str
         except: pass
     return user_input if user_input.endswith(".xml") else f"{origin}/sitemap.xml"
 
-# ── 2. تقنيات async_scraper (الاستخراج المتقدم) ──────────────────────────
+# ── 3. تقنيات async_scraper (الاستخراج المتقدم) ──────────────────────────
 
 def load_scraper_state() -> Dict[str, Any]:
     if os.path.exists(SCRAPER_STATE_JSON):
@@ -125,12 +142,14 @@ def _clean_text(val) -> str:
 def _save_competitor_csv_rows(rows: List[Dict[str, Any]]) -> int:
     if not rows: return 0
     df = pd.DataFrame(rows).drop_duplicates(subset=["comp_url"])
-    _col_order = ["name", "price", "brand", "image_url", "comp_url", "sku"]
+    # التأكد من وجود كافة الأعمدة المطلوبة للمقارنة
+    _col_order = ["name", "price", "brand", "size", "type", "image_url", "comp_url", "sku"]
     for c in _col_order:
         if c not in df.columns: df[c] = ""
     df = df[_col_order]
     df_ar = df.rename(columns={
         "name": "اسم المنتج", "price": "السعر", "brand": "الماركة",
+        "size": "الحجم", "type": "النوع",
         "image_url": "رابط_الصورة", "comp_url": "رابط_المنتج", "sku": "sku",
     })
     os.makedirs("data", exist_ok=True)
@@ -162,23 +181,23 @@ class AsyncCompetitorScraper:
     async def fetch_product(self, session: aiohttp.ClientSession, url: str) -> Optional[Dict[str, Any]]:
         async with self.semaphore:
             try:
-                # محاكاة تأخير عشوائي لتقليل الحظر
-                await asyncio.sleep(random.uniform(0.1, 0.5))
+                await asyncio.sleep(random.uniform(0.1, 0.4))
                 async with session.get(url, timeout=25, headers=_BROWSER_HEADERS) as resp:
                     if resp.status != 200: return None
                     html = await resp.text()
                     soup = BeautifulSoup(html, "html.parser")
                     
-                    # 1. استخراج Salla Config (أدق طريقة لسعيد صلاح وسلة)
+                    product_data = None
+                    # 1. Salla Config
                     salla_match = re.search(r'window\.Salla\.config\s*=\s*({.*?});', html, re.DOTALL)
                     if salla_match:
                         try:
                             config = json.loads(salla_match.group(1))
                             p = config.get('product', {})
                             if p:
-                                return {
+                                product_data = {
                                     "name": _clean_text(p.get('name')),
-                                    "price": _clean_price(p.get('price')),
+                                    "price": _clean_price(p.get('price', {}).get('amount') if isinstance(p.get('price'), dict) else p.get('price')),
                                     "brand": _clean_text(p.get('brand_name', '')),
                                     "image_url": p.get('image', ''),
                                     "comp_url": url,
@@ -187,34 +206,41 @@ class AsyncCompetitorScraper:
                         except: pass
 
                     # 2. JSON-LD Fallback
-                    for script in soup.find_all("script", type="application/ld+json"):
-                        try:
-                            data = json.loads(script.string)
-                            nodes = data.get("@graph", [data]) if isinstance(data, dict) else data
-                            if not isinstance(nodes, list): nodes = [nodes]
-                            for node in nodes:
-                                if node.get("@type") in ("Product", "ProductGroup"):
-                                    name = _clean_text(node.get("name"))
-                                    offers = node.get("offers", {})
-                                    if isinstance(offers, list) and offers: offers = offers[0]
-                                    price = _clean_price(offers.get("price") or offers.get("lowPrice"))
-                                    if name and price:
-                                        return {
-                                            "name": name, "price": price,
-                                            "brand": _clean_text(node.get("brand", {}).get("name") if isinstance(node.get("brand"), dict) else node.get("brand")),
-                                            "image_url": _clean_text(node.get("image", [None])[0] if isinstance(node.get("image"), list) else node.get("image")),
-                                            "comp_url": url, "sku": node.get("sku") or hashlib.md5(url.encode()).hexdigest()[:10]
-                                        }
-                        except: continue
+                    if not product_data:
+                        for script in soup.find_all("script", type="application/ld+json"):
+                            try:
+                                data = json.loads(script.string)
+                                nodes = data.get("@graph", [data]) if isinstance(data, dict) else data
+                                if not isinstance(nodes, list): nodes = [nodes]
+                                for node in nodes:
+                                    if node.get("@type") in ("Product", "ProductGroup"):
+                                        name = _clean_text(node.get("name"))
+                                        offers = node.get("offers", {})
+                                        if isinstance(offers, list) and offers: offers = offers[0]
+                                        price = _clean_price(offers.get("price") or offers.get("lowPrice"))
+                                        if name and price:
+                                            product_data = {
+                                                "name": name, "price": price,
+                                                "brand": _clean_text(node.get("brand", {}).get("name") if isinstance(node.get("brand"), dict) else node.get("brand")),
+                                                "image_url": _clean_text(node.get("image", [None])[0] if isinstance(node.get("image"), list) else node.get("image")),
+                                                "comp_url": url, "sku": node.get("sku") or hashlib.md5(url.encode()).hexdigest()[:10]
+                                            }
+                                            break
+                                if product_data: break
+                            except: continue
+
+                    if product_data:
+                        # استخراج الحجم والنوع من الاسم لضمان المطابقة
+                        name = product_data["name"]
+                        product_data["size"] = extract_size_from_name(name)
+                        product_data["type"] = extract_type_from_name(name)
+                        return product_data
             except: pass
             return None
-
-import random
 
 async def run_scraper(sitemap_urls: List[str], progress_callback=None, force_new=False):
     state = load_scraper_state()
     
-    # روابط تصفية المنتجات (سلة/زد)
     def is_product_url(u):
         return "/p/" in u and "/c/" not in u and not any(x in u for x in ["/blog/", "/tags/", "/policy"])
 
@@ -224,7 +250,6 @@ async def run_scraper(sitemap_urls: List[str], progress_callback=None, force_new
             scraper = AsyncCompetitorScraper()
             all_urls = []
             for raw_url in sitemap_urls:
-                # استخدام resolve_to_sitemap_url الذكي
                 s_url = await resolve_to_sitemap_url(session, raw_url)
                 urls = await scraper.scan_sitemap(session, s_url)
                 all_urls.extend([u for u in urls if is_product_url(u)])
@@ -242,24 +267,20 @@ async def run_scraper(sitemap_urls: List[str], progress_callback=None, force_new
 
         scraper = AsyncCompetitorScraper(concurrency_limit=15)
         
-        # معالجة مع حفظ لحظي لتمكين العرض الحي
         for i, url in enumerate(to_scrape):
             res = await scraper.fetch_product(session, url)
             state["scraped_urls"].append(url)
             if res:
                 state["results"].append(res)
-                # حفظ فوري للنتائج لتمكين العرض الحي في لوحة التحكم
                 _save_competitor_csv_rows(state["results"])
             
-            # حفظ الحالة كل 5 منتجات لضمان الاستمرارية (Resume)
             if i % 5 == 0 or i == len(to_scrape) - 1:
                 save_scraper_state(state)
                 if progress_callback:
                     prog = 0.1 + (0.9 * (len(state["scraped_urls"]) / total))
                     progress_callback(f"تم استخراج {len(state['results'])} منتج من {total}...", prog)
             
-            # تأخير ذكي كل دفعة
-            if i % 30 == 0: await asyncio.sleep(0.5)
+            if i % 30 == 0: await asyncio.sleep(0.3)
 
     count = _save_competitor_csv_rows(state["results"])
     return count, state["results"]
