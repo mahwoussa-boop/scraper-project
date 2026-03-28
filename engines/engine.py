@@ -156,6 +156,8 @@ def run_full_analysis(our_df: pd.DataFrame, comp_dfs: Dict[str, pd.DataFrame], p
                     status = "✅ موافق عليها"
                     if comp_price < our_price:
                         status = "🟢 سعر أقل"
+                    elif our_price < comp_price:
+                        status = "🔴 سعرنا أعلى"
                     elif abs(comp_price - our_price) / our_price > 0.2:
                         status = "⚠️ تحت المراجعة"
                     

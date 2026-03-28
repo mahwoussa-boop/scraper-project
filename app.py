@@ -41,7 +41,7 @@ os.makedirs("data", exist_ok=True)
 
 # ── Session State ─────────────────────────
 if "results" not in st.session_state:
-    st.session_state.results = {"price_lower": [], "missing": [], "approved": [], "review": [], "processed": [], "all": pd.DataFrame()}
+    st.session_state.results = {"price_lower": [], "price_higher": [], "missing": [], "approved": [], "review": [], "processed": [], "all": pd.DataFrame()}
 if "our_df" not in st.session_state:
     OUR_PRODUCTS_PATH = "data/our_products.csv"
     if os.path.exists(OUR_PRODUCTS_PATH):
@@ -56,12 +56,13 @@ if automation_manager.is_running:
     st_autorefresh(interval=5000, key="auto_refresh")
     
     # تحديث النتائج من المحرك
-    if not automation_manager.current_analysis_df.empty:
-        df = automation_manager.current_analysis_df
-        st.session_state.results["all"] = df
-        st.session_state.results["price_lower"] = df[df["الحالة"] == "🟢 سعر أقل"].to_dict('records')
-        st.session_state.results["approved"] = df[df["الحالة"] == "✅ موافق عليها"].to_dict('records')
-        st.session_state.results["review"] = df[df["الحالة"] == "⚠️ تحت المراجعة"].to_dict('records')
+        if not automation_manager.current_analysis_df.empty:
+            df = automation_manager.current_analysis_df
+            st.session_state.results["all"] = df
+            st.session_state.results["price_lower"] = df[df["الحالة"] == "🟢 سعر أقل"].to_dict('records')
+            st.session_state.results["price_higher"] = df[df["الحالة"] == "🔴 سعرنا أعلى"].to_dict('records')
+            st.session_state.results["approved"] = df[df["الحالة"] == "✅ موافق عليها"].to_dict('records')
+            st.session_state.results["review"] = df[df["الحالة"] == "⚠️ تحت المراجعة"].to_dict('records')
     
     if not automation_manager.current_missing_df.empty:
         st.session_state.results["missing"] = automation_manager.current_missing_df.to_dict('records')
@@ -70,7 +71,7 @@ if automation_manager.is_running:
     st.session_state.results["processed"] = get_processed(limit=200)
 
 # ── التنقل ───────────────────────────────
-PAGES = ["📊 لوحة التحكم", "📂 رفع الملفات", "🟢 سعر أقل", "🔍 منتجات مفقودة", "✅ موافق عليها", "⚠️ تحت المراجعة", "✔️ تمت المعالجة", "⚙️ الإعدادات"]
+PAGES = ["📊 لوحة التحكم", "📂 رفع الملفات", "🔴 سعرنا أعلى", "🟢 سعر أقل", "🔍 منتجات مفقودة", "✅ موافق عليها", "⚠️ تحت المراجعة", "✔️ تمت المعالجة", "⚙️ الإعدادات"]
 with st.sidebar:
     st.image("https://mahwous.com/cdn/shop/files/logo_mahwous.png", width=180)
     st.markdown("---")
@@ -93,12 +94,13 @@ if page == "📊 لوحة التحكم":
     
     # الإحصائيات
     res = st.session_state.results
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.markdown(stat_card("🟢 سعر أقل", len(res["price_lower"]), "#28a745"), unsafe_allow_html=True)
-    c2.markdown(stat_card("🔍 مفقودة", len(res["missing"]), "#17a2b8"), unsafe_allow_html=True)
-    c3.markdown(stat_card("✅ موافق", len(res["approved"]), "#007bff"), unsafe_allow_html=True)
-    c4.markdown(stat_card("⚠️ مراجعة", len(res["review"]), "#ffc107"), unsafe_allow_html=True)
-    c5.markdown(stat_card("✔️ معالجة", len(res["processed"]), "#6c757d"), unsafe_allow_html=True)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.markdown(stat_card("🔴 سعر أعلى", len(res["price_higher"]), "#dc3545"), unsafe_allow_html=True)
+    c2.markdown(stat_card("🟢 سعر أقل", len(res["price_lower"]), "#28a745"), unsafe_allow_html=True)
+    c3.markdown(stat_card("🔍 مفقودة", len(res["missing"]), "#17a2b8"), unsafe_allow_html=True)
+    c4.markdown(stat_card("✅ موافق", len(res["approved"]), "#007bff"), unsafe_allow_html=True)
+    c5.markdown(stat_card("⚠️ مراجعة", len(res["review"]), "#ffc107"), unsafe_allow_html=True)
+    c6.markdown(stat_card("✔️ معالجة", len(res["processed"]), "#6c757d"), unsafe_allow_html=True)
     
     st.markdown("---")
     
@@ -120,6 +122,22 @@ if page == "📊 لوحة التحكم":
     else:
         st.info("جاري سحب البيانات والمقارنة... ستظهر البطاقات هنا فوراً.")
 
+# ── قسم سعرنا أعلى ───────────────────────────
+elif page == "🔴 سعرنا أعلى":
+    st.header("🔴 منتجات سعرنا فيها أعلى من المنافسين")
+    items = st.session_state.results["price_higher"]
+    if items:
+        for item in items:
+            st.markdown(vs_card(
+                item["اسم المنتج"], item["سعرنا"], item["سعر المنافس"], 
+                item["المنافس"], item["رابط الصورة"], item["الحالة"]
+            ), unsafe_allow_html=True)
+            if st.button(f"✔️ تمت المعالجة (أرشفة) - {item['sku']}", key=f"proc_h_{item['sku']}"):
+                save_processed(str(item['sku']), item['اسم المنتج'], item['المنافس'], "أرشفة يدوية", item['سعرنا'], item['سعر المنافس'], str(item['sku']))
+                st.rerun()
+    else:
+        st.success("ممتاز! لا توجد منتجات بسعر أعلى من المنافسين.")
+
 # ── قسم سعر أقل ───────────────────────────
 elif page == "🟢 سعر أقل":
     st.header("🟢 منتجات بأسعار أقل عند المنافسين")
@@ -130,7 +148,7 @@ elif page == "🟢 سعر أقل":
                 item["اسم المنتج"], item["سعرنا"], item["سعر المنافس"], 
                 item["المنافس"], item["رابط الصورة"], item["الحالة"]
             ), unsafe_allow_html=True)
-            if st.button(f"✔️ تمت المعالجة (أرشفة) - {item['sku']}", key=f"proc_{item['sku']}"):
+            if st.button(f"✔️ تمت المعالجة (أرشفة) - {item['sku']}", key=f"proc_l_{item['sku']}"):
                 save_processed(str(item['sku']), item['اسم المنتج'], item['المنافس'], "أرشفة يدوية", item['سعرنا'], item['سعر المنافس'], str(item['sku']))
                 st.rerun()
     else:
