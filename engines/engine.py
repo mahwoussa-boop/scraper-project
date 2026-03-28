@@ -62,6 +62,21 @@ def extract_concentration(text: str) -> str:
     if "cologne" in text: return "Cologne"
     return ""
 
+def extract_brand(text: str) -> str:
+    """استخراج الماركة من النص"""
+    if not isinstance(text, str): return ""
+    # يمكن توسيع هذه القائمة من config.py
+    brands = ["Dior", "Chanel", "Gucci", "Tom Ford", "Versace", "Lattafa", "لطافة", "D&G", "YSL"]
+    for b in brands:
+        if b.lower() in text.lower(): return b
+    return ""
+
+def is_sample(text: str) -> bool:
+    """التحقق مما إذا كان المنتج عينة (Sample)"""
+    if not isinstance(text, str): return False
+    keywords = ["sample", "عينة", "عينه", "vial", "سمبل", "2ml", "5ml"]
+    return any(k in text.lower() for k in keywords)
+
 def read_file(f):
     """قراءة ملفات CSV/Excel مع معالجة الترميز والأعمدة"""
     try:
