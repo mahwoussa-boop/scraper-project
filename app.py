@@ -233,11 +233,17 @@ elif page == "📂 رفع الملفات":
     selected_comps = st.multiselect("اختر المنافسين للكشط", ["سعيد صلاح", "نايس ون", "وجوه", "سيفورا"], default=["سعيد صلاح"])
     
     # عرض حالة الملف المحفوظ
-    if "our_df" in st.session_state:
-        st.success(f"✅ ملف متجر مهووس محمل حالياً ({len(st.session_state.our_df)} منتج)")
+    if "our_df" in st.session_state and st.session_state.our_df is not None:
+        try:
+            count = len(st.session_state.our_df)
+            st.success(f"✅ ملف متجر مهووس محمل حالياً ({count} منتج)")
+        except:
+            st.warning("⚠️ جاري تحميل بيانات الملف...")
+            
         if st.button("🗑️ حذف الملف ورفع ملف جديد"):
             if os.path.exists(OUR_PRODUCTS_PATH): os.remove(OUR_PRODUCTS_PATH)
-            del st.session_state.our_df
+            st.session_state.our_df = None
+            if "our_df" in st.session_state: del st.session_state.our_df
             st.rerun()
 
     if our_file:
