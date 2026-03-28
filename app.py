@@ -220,14 +220,26 @@ elif page == "📂 رفع الملفات":
     our_file = st.file_uploader("📦 ملف منتجاتنا (CSV/Excel)", type=["csv","xlsx","xls"], key="our_file")
     selected_comps = st.multiselect("اختر المنافسين للكشط", ["سعيد صلاح", "نايس ون", "وجوه", "سيفورا"], default=["سعيد صلاح"])
     
-    if st.button("🚀 بدء الكشط والتحليل الشامل"):
-        if our_file:
-            our_df, err = read_file(our_file)
-            if not err:
-                sitemaps = ["https://saeedsalah.com/sitemap.xml"] # مثال
-                automation_manager.start_automation(sitemaps, our_file_path=None) # سيتم الحفظ داخلياً
-                st.success("بدأت الأتمتة الشاملة! يمكنك متابعة النتائج في لوحة التحكم.")
+    if our_file:
+        our_df, err = read_file(our_file)
+        if not err:
+            st.session_state.our_df = our_df
+            # حفظ الملف محلياً لاستخدامه في الأتمتة
+            our_df.to_csv("data/our_products.csv", index=False)
+            st.success("✅ تم تحميل ملف متجر مهووس بنجاح!")
+            
+            # إذا كانت الأتمتة لا تعمل، نبدأها تلقائياً
+            if not automation_manager.is_running:
+                sitemaps = SITEMAP_URLS_DEFAULT.split("\n") if 'SITEMAP_URLS_DEFAULT' in globals() else ["https://saeedsalah.com/sitemap.xml"]
+                automation_manager.start_automation(sitemaps)
+                st.info("🚀 تم بدء المقارنة التلقائية مع المنافسين...")
                 st.rerun()
+    
+    if st.button("🔄 إعادة تشغيل الأتمتة يدوياً"):
+        sitemaps = SITEMAP_URLS_DEFAULT.split("\n") if 'SITEMAP_URLS_DEFAULT' in globals() else ["https://saeedsalah.com/sitemap.xml"]
+        automation_manager.start_automation(sitemaps)
+        st.success("بدأت الأتمتة الشاملة! يمكنك متابعة النتائج في لوحة التحكم.")
+        st.rerun()
 
 # ... (إضافة بقية الصفحات كـ elif بنفس المنطق السابق)
 else:
