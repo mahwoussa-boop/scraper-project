@@ -1,10 +1,11 @@
 """
-app.py - نظام التسعير الذكي مهووس v42.0
+app.py - نظام التسعير الذكي مهووس v44.0
 ═══════════════════════════════════════════════════════════
 ✅ المعالج الشامل: بطاقات منتجات ذكية (Product Cards)
 ✅ عرض حي وتلقائي للأقسام (سعر أقل، مفقودة، إلخ)
 ✅ مطابقة الحجم والتركيز والنوع بدقة 100%
 ✅ أتمتة كاملة في الخلفية مع حفظ الحالة
+✅ إصلاح خطأ الإزاحة (IndentationError)
 """
 import streamlit as st
 import pandas as pd
@@ -56,17 +57,17 @@ if automation_manager.is_running:
     
     # تحديث النتائج من المحرك
     if not automation_manager.current_analysis_df.empty:
-            df = automation_manager.current_analysis_df
-            st.session_state.results["all"] = df
-            st.session_state.results["price_lower"] = df[df["الحالة"] == "🟢 سعر أقل"].to_dict('records')
-            st.session_state.results["approved"] = df[df["الحالة"] == "✅ موافق عليها"].to_dict('records')
-            st.session_state.results["review"] = df[df["الحالة"] == "⚠️ تحت المراجعة"].to_dict('records')
-        
-        if not automation_manager.current_missing_df.empty:
-            st.session_state.results["missing"] = automation_manager.current_missing_df.to_dict('records')
-        
-        # جلب الأرشيف (تمت المعالجة)
-        st.session_state.results["processed"] = get_processed(limit=200)
+        df = automation_manager.current_analysis_df
+        st.session_state.results["all"] = df
+        st.session_state.results["price_lower"] = df[df["الحالة"] == "🟢 سعر أقل"].to_dict('records')
+        st.session_state.results["approved"] = df[df["الحالة"] == "✅ موافق عليها"].to_dict('records')
+        st.session_state.results["review"] = df[df["الحالة"] == "⚠️ تحت المراجعة"].to_dict('records')
+    
+    if not automation_manager.current_missing_df.empty:
+        st.session_state.results["missing"] = automation_manager.current_missing_df.to_dict('records')
+    
+    # جلب الأرشيف (تمت المعالجة)
+    st.session_state.results["processed"] = get_processed(limit=200)
 
 # ── التنقل ───────────────────────────────
 PAGES = ["📊 لوحة التحكم", "📂 رفع الملفات", "🟢 سعر أقل", "🔍 منتجات مفقودة", "✅ موافق عليها", "⚠️ تحت المراجعة", "✔️ تمت المعالجة", "⚙️ الإعدادات"]
@@ -108,7 +109,6 @@ if page == "📊 لوحة التحكم":
         cols = st.columns(3)
         for i, (_, row) in enumerate(latest.iterrows()):
             with cols[i % 3]:
-                # استخدام vs_card من styles.py لعرض المقارنة بجمالية
                 st.markdown(vs_card(
                     row["اسم المنتج"], 
                     row["سعرنا"], 
