@@ -234,14 +234,3 @@ SECTIONS = [
 SIDEBAR_SECTIONS = SECTIONS
 PAGES_PER_TABLE  = 25
 DB_PATH          = "perfume_pricing.db"
-
-# ══════════════════════════════════════════════
-#  روابط Sitemap الافتراضية للمنافسين v28.0
-# ══════════════════════════════════════════════
-SITEMAP_URLS_DEFAULT = """
-https://v-perfume.com/sitemap_products_1.xml
-https://niceonesa.com/sitemap.xml
-https://goldenscent.com/sitemap.xml
-https://faces.com/sitemap.xml
-https://sephora.sa/sitemap.xml
-"""

@@ -103,21 +103,6 @@ def init_db():
         action TEXT DEFAULT 'hidden'
     )""")
 
-    # المنتجات المعالجة (الأرشيف)
-    c.execute("""CREATE TABLE IF NOT EXISTS processed_products (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        timestamp TEXT,
-        product_key TEXT UNIQUE,
-        product_name TEXT,
-        competitor TEXT,
-        action TEXT,
-        old_price REAL,
-        new_price REAL,
-        product_id TEXT,
-        notes TEXT,
-        auto_processed INTEGER DEFAULT 0
-    )""")
-
     conn.commit()
     conn.close()
 
