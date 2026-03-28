@@ -1,40 +1,30 @@
 """
-app.py - نظام التسعير الذكي مهووس v44.0
-═══════════════════════════════════════════════════════════
-✅ المعالج الشامل: بطاقات منتجات ذكية (Product Cards)
-✅ عرض حي وتلقائي للأقسام (سعر أقل، مفقودة، إلخ)
-✅ مطابقة الحجم والتركيز والنوع بدقة 100%
-✅ أتمتة كاملة في الخلفية مع حفظ الحالة
-✅ إصلاح خطأ الإزاحة (IndentationError)
+app.py v45.1 — تطبيق مهووس (Mahwoos App)
+══════════════════════════════════════════════
+✅ إدارة الأتمتة والبحث المستمر 24 ساعة
+✅ عرض ذكي للمنتجات والمقارنات
+✅ دعم 6 أقسام رئيسية للأسعار والمفقودات
 """
 import streamlit as st
 import pandas as pd
-import threading
-import time
-import uuid
-import os
-from datetime import datetime
-
-try:
-    from streamlit.runtime.scriptrunner import add_script_run_ctx
-except ImportError:
-    try:
-        from streamlit.scriptrunner import add_script_run_ctx
-    except ImportError:
-        def add_script_run_ctx(t): return t
-
-from config import *
-from styles import get_styles, stat_card, vs_card, comp_strip, miss_card, get_sidebar_toggle_js
-from engines.engine import (read_file, run_full_analysis, find_missing_products,
-                             extract_brand, extract_size, extract_type, is_sample)
+import os, time
 from engines.automation import automation_manager
-from utils.db_manager import save_processed, get_processed, undo_processed, get_processed_keys
-from utils.helpers import safe_float, format_price, format_diff
+from utils.db_manager import get_processed, save_processed
+from utils.ui_components import stat_card, vs_card, product_card
 
-# ── إعداد الصفحة ──────────────────────────
-st.set_page_config(page_title=APP_TITLE, page_icon=APP_ICON,
-                   layout="wide", initial_sidebar_state="expanded")
-st.markdown(get_styles(), unsafe_allow_html=True)
+st.set_page_config(page_title="لوحة تحكم مهووس", layout="wide", initial_sidebar_state="expanded")
+
+# CSS مخصص لتحسين المظهر
+st.markdown("""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
+    html, body, [class*="css"] { font-family: 'Cairo', sans-serif; text-align: right; direction: rtl; }
+    .stMetric { background: #f8f9fa; padding: 15px; border-radius: 10px; border-right: 5px solid #007bff; }
+    div[data-testid="stSidebarNav"] { display: none; }
+    .main { background-color: #f5f7f9; }
+    .stButton>button { width: 100%; border-radius: 5px; font-weight: bold; }
+    </style>
+""", unsafe_allow_html=True)
 
 # إنشاء المجلدات المطلوبة
 os.makedirs("data", exist_ok=True)
@@ -46,8 +36,8 @@ if "our_df" not in st.session_state:
     OUR_PRODUCTS_PATH = "data/our_products.csv"
     if os.path.exists(OUR_PRODUCTS_PATH):
         try:
-            df, err = read_file(OUR_PRODUCTS_PATH)
-            if not err: st.session_state.our_df = df
+            st.session_state.our_df = pd.read_csv(OUR_PRODUCTS_PATH)
+            automation_manager.set_our_products(st.session_state.our_df)
         except: pass
 
 # ── التحديث التلقائي ───────────────────────
@@ -56,13 +46,13 @@ if automation_manager.is_running:
     st_autorefresh(interval=5000, key="auto_refresh")
     
     # تحديث النتائج من المحرك
-        if not automation_manager.current_analysis_df.empty:
-            df = automation_manager.current_analysis_df
-            st.session_state.results["all"] = df
-            st.session_state.results["price_lower"] = df[df["الحالة"] == "🟢 سعر أقل"].to_dict('records')
-            st.session_state.results["price_higher"] = df[df["الحالة"] == "🔴 سعرنا أعلى"].to_dict('records')
-            st.session_state.results["approved"] = df[df["الحالة"] == "✅ موافق عليها"].to_dict('records')
-            st.session_state.results["review"] = df[df["الحالة"] == "⚠️ تحت المراجعة"].to_dict('records')
+    if not automation_manager.current_analysis_df.empty:
+        df = automation_manager.current_analysis_df
+        st.session_state.results["all"] = df
+        st.session_state.results["price_lower"] = df[df["الحالة"] == "🟢 سعر أقل"].to_dict('records')
+        st.session_state.results["price_higher"] = df[df["الحالة"] == "🔴 سعرنا أعلى"].to_dict('records')
+        st.session_state.results["approved"] = df[df["الحالة"] == "✅ موافق عليها"].to_dict('records')
+        st.session_state.results["review"] = df[df["الحالة"] == "⚠️ تحت المراجعة"].to_dict('records')
     
     if not automation_manager.current_missing_df.empty:
         st.session_state.results["missing"] = automation_manager.current_missing_df.to_dict('records')
@@ -78,15 +68,8 @@ with st.sidebar:
     page = st.radio("القائمة الرئيسية", PAGES)
     st.markdown("---")
     st.info(f"🤖 الحالة: {automation_manager.current_status}")
-    if automation_manager.is_running:
-        st.progress(automation_manager.progress)
-        if st.button("🛑 إيقاف الأتمتة"):
-            automation_manager.stop_automation()
-            st.rerun()
-    else:
-        if st.button("🚀 بدء الأتمتة"):
-            automation_manager.start_automation(["https://saeedsalah.com/sitemap.xml"])
-            st.rerun()
+    if st.button("🔄 تحديث يدوي للبيانات"):
+        st.rerun()
 
 # ── لوحة التحكم ───────────────────────────
 if page == "📊 لوحة التحكم":
@@ -105,19 +88,15 @@ if page == "📊 لوحة التحكم":
     st.markdown("---")
     
     # عرض البطاقات الذكية لأحدث النتائج
-    st.subheader("✨ أحدث المقارنات الذكية")
-    if not res["all"].empty:
-        latest = res["all"].head(6)
-        cols = st.columns(3)
-        for i, (_, row) in enumerate(latest.iterrows()):
-            with cols[i % 3]:
-                st.markdown(vs_card(
-                    row["اسم المنتج"], 
-                    row["سعرنا"], 
-                    row["سعر المنافس"], 
-                    row["المنافس"],
-                    row["رابط الصورة"],
-                    row["الحالة"]
+    st.subheader("🆕 أحدث المنتجات المكتشفة")
+    if not st.session_state.results["all"].empty:
+        recent = st.session_state.results["all"].head(12)
+        cols = st.columns(4)
+        for i, (_, item) in enumerate(recent.iterrows()):
+            with cols[i % 4]:
+                st.markdown(product_card(
+                    item["اسم المنتج"], item["سعرنا"], item["سعر المنافس"], 
+                    item["المنافس"], item["رابط الصورة"], item["الحالة"], item["نسبة التشابه"]
                 ), unsafe_allow_html=True)
     else:
         st.info("جاري سحب البيانات والمقارنة... ستظهر البطاقات هنا فوراً.")
@@ -159,54 +138,44 @@ elif page == "✔️ تمت المعالجة":
     st.header("✔️ أرشيف المنتجات المعالجة")
     items = st.session_state.results["processed"]
     if items:
-        for item in items:
-            with st.container():
-                c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
-                c1.write(f"**{item['product_name']}**")
-                c2.write(f"المنافس: {item['competitor']}")
-                c3.write(f"الإجراء: {item['action']}")
-                if c4.button("🔄 تراجع", key=f"undo_{item['product_key']}"):
-                    undo_processed(item['product_key'])
-                    st.rerun()
-                st.markdown("---")
+        df_p = pd.DataFrame(items)
+        st.dataframe(df_p, use_container_width=True)
     else:
-        st.info("الأرشيف فارغ حالياً.")
+        st.info("لا توجد منتجات مؤرشفة بعد.")
 
-# ── قسم المنتجات المفقودة ──────────────────
+# ── قسم منتجات مفقودة ────────────────────────
 elif page == "🔍 منتجات مفقودة":
-    st.header("🔍 منتجات مفقودة في متجرنا")
+    st.header("🔍 منتجات متوفرة عند المنافسين وغير متوفرة عندنا")
     items = st.session_state.results["missing"]
     if items:
-        cols = st.columns(3)
-        for i, item in enumerate(items):
-            with cols[i % 3]:
-                st.markdown(miss_card(
-                    item["اسم المنتج"], item["سعر المنافس"], 
-                    item["المنافس"], item["رابط الصورة"]
-                ), unsafe_allow_html=True)
+        for item in items:
+            st.markdown(vs_card(
+                item["اسم المنتج"], 0, item["سعر المنافس"], 
+                item["المنافس"], item["رابط الصورة"], item["الحالة"]
+            ), unsafe_allow_html=True)
     else:
-        st.info("لا توجد منتجات مفقودة مكتشفة بعد.")
+        st.info("جاري البحث عن فرص مفقودة...")
 
-# ── رفع الملفات ───────────────────────────
+# ── رفع الملفات ─────────────────────────────
 elif page == "📂 رفع الملفات":
-    st.header("📂 إدارة ملفات المتجر")
-    our_file = st.file_uploader("📦 ارفع ملف متجر مهووس (CSV/Excel)", type=["csv","xlsx","xls"])
-    
-    if "our_df" in st.session_state and st.session_state.our_df is not None:
-        st.success(f"✅ ملف المتجر محمل: {len(st.session_state.our_df)} منتج")
-        if st.button("🗑️ حذف الملف"):
-            if os.path.exists("data/our_products.csv"): os.remove("data/our_products.csv")
-            del st.session_state.our_df
-            st.rerun()
-            
-    if our_file:
-        df, err = read_file(our_file)
-        if not err:
-            st.session_state.our_df = df
+    st.header("📂 إدارة ملفات المنتجات")
+    uploaded_file = st.file_uploader("ارفع ملف متجر مهووس (CSV/Excel)", type=["csv", "xlsx"])
+    if uploaded_file:
+        from engines.engine import read_file
+        df, err = read_file(uploaded_file)
+        if err: st.error(err)
+        else:
             df.to_csv("data/our_products.csv", index=False)
-            st.success("تم حفظ الملف! تبدأ المقارنة الآن...")
-            automation_manager.start_automation(["https://saeedsalah.com/sitemap.xml"])
+            st.session_state.our_df = df
+            automation_manager.set_our_products(df)
+            st.success("تم تحديث قاعدة بيانات متجرنا بنجاح!")
             st.rerun()
 
-else:
-    st.info("هذا القسم قيد التحديث ليتناسب مع المعالج الشامل.")
+# ── الإعدادات ───────────────────────────────
+elif page == "⚙️ الإعدادات":
+    st.header("⚙️ إعدادات النظام")
+    st.write(f"إصدار التطبيق: v45.1")
+    if st.button("🚀 إعادة تشغيل محرك الأتمتة"):
+        automation_manager.stop()
+        automation_manager.start()
+        st.success("تمت إعادة التشغيل.")
