@@ -398,4 +398,5 @@ async def run_scraper(sitemap_urls: List[str], progress_callback=None):
             if progress_callback and i % 5 == 0:
                 progress_callback(f"تم كشط {len(all_rows)} منتج من {total}...", 0.1 + (0.8 * (i/total)))
 
-    return _save_competitor_csv_rows(all_rows)
+    count = _save_competitor_csv_rows(all_rows)
+    return count, all_rows

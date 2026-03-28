@@ -84,6 +84,7 @@ _defaults = {
     "decisions_pending": {},   # {product_name: action}
     "our_df": None, "comp_dfs": None,  # حفظ الملفات للمنتجات المفقودة
     "hidden_products": set(),  # منتجات أُرسلت لـ Make أو أُزيلت
+    "last_scraped_data": None, # v27: نتائج آخر عملية كشط
 }
 for k, v in _defaults.items():
     if k not in st.session_state:
@@ -856,6 +857,26 @@ if page == "📊 لوحة التحكم":
         }).head(200), use_container_width=True, height=200)
         st.markdown("---")
 
+    # v27: عرض نتائج آخر عملية كشط
+    if st.session_state.get("last_scraped_data"):
+        st.markdown("#### 🕷️ آخر عملية كشط (الذاكرة المؤقتة)")
+        scraped_df = pd.DataFrame(st.session_state.last_scraped_data)
+        
+        # ملخص سريع
+        s1, s2, s3 = st.columns(3)
+        s1.metric("📦 عدد المنتجات", f"{len(scraped_df)}")
+        s2.metric("🏷️ عدد الماركات", f"{scraped_df['brand'].nunique() if 'brand' in scraped_df.columns else 0}")
+        s3.metric("💰 متوسط السعر", f"{scraped_df['price'].mean():.0f} ر.س" if 'price' in scraped_df.columns else "0")
+        
+        # جدول مختصر بدقة
+        display_cols = ["name", "price", "brand", "sku", "comp_url"]
+        display_cols = [c for c in display_cols if c in scraped_df.columns]
+        st.dataframe(scraped_df[display_cols].rename(columns={
+            "name": "المنتج", "price": "السعر", "brand": "الماركة", 
+            "sku": "SKU", "comp_url": "الرابط"
+        }), use_container_width=True, height=250)
+        st.markdown("---")
+
     if st.session_state.results:
         r = st.session_state.results
         cols = st.columns(5)
@@ -1018,7 +1039,8 @@ elif page == "📂 رفع الملفات":
                 with st.spinner("🕷️ جاري كشط مواقع المنافسين..."):
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
-                    count = loop.run_until_complete(run_scraper(sitemap_urls, progress_callback=update_scraping))
+                    count, scraped_rows = loop.run_until_complete(run_scraper(sitemap_urls, progress_callback=update_scraping))
+                    st.session_state.last_scraped_data = scraped_rows
                     scraping_status.success(f"✅ تم كشط {count} منتج بنجاح!")
                 
                 # تحميل الملف المكشوط
