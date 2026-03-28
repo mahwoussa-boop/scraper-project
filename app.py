@@ -770,29 +770,37 @@ with st.sidebar:
                 except:
                     st.warning(f"❌ {key_name} غير موجود")
 
-    # v28: بدء الأتمتة التلقائية عند فتح التطبيق
+    # v29: بدء الأتمتة التلقائية عند فتح التطبيق
     if not st.session_state.auto_scraping_started:
-        # روابط المنافسين الافتراضية (يمكن تعديلها من واجهة الكشط)
-        default_sitemaps = [url.strip() for url in SITEMAP_URLS_DEFAULT.split("\n") if url.strip()]
-        # محاولة العثور على آخر ملف متجر تم رفعه
+        # روابط المنافسين (الموجودة في الإعدادات أو المضافة يدوياً)
+        sitemaps = [url.strip() for url in SITEMAP_URLS_DEFAULT.split("\n") if url.strip()]
+        
+        # محاولة العثور على ملف المتجر المرفوع حديثاً أو سابقاً
         last_job = get_last_job()
         our_file = None
         if last_job and last_job.get("our_file"):
-            our_file = os.path.join("data", last_job["our_file"])
+            # التأكد من وجود الملف في مجلد data
+            potential_path = os.path.join("data", last_job["our_file"])
+            if os.path.exists(potential_path):
+                our_file = potential_path
         
-        automation_manager.start_automation(default_sitemaps, our_file)
+        # بدء الأتمتة
+        automation_manager.start_automation(sitemaps, our_file)
         st.session_state.auto_scraping_started = True
 
-    # عرض حالة الأتمتة في القائمة الجانبية
+    # عرض حالة الأتمتة في القائمة الجانبية (v29)
     st.markdown("---")
-    st.markdown(f"**🤖 حالة الأتمتة (24س):**")
+    st.markdown(f"**🤖 محرك الأتمتة الشامل (24س):**")
     status_color = "#00C853" if "✅" in automation_manager.current_status else "#FFD600" if "🕷️" in automation_manager.current_status else "#888"
-    st.markdown(f'<div style="font-size:.8rem; color:{status_color}">● {automation_manager.current_status}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div style="background:{status_color}22; border-left:4px solid {status_color}; padding:8px; border-radius:4px; font-size:.8rem; color:{status_color}">● {automation_manager.current_status}</div>', unsafe_allow_html=True)
     if automation_manager.is_running:
         st.progress(automation_manager.progress)
     if automation_manager.next_run_time:
-        next_t = datetime.fromisoformat(automation_manager.next_run_time).strftime("%H:%M")
-        st.caption(f"التحديث القادم: {next_t}")
+        next_t = datetime.fromisoformat(automation_manager.next_run_time).strftime("%m/%d %H:%M")
+        st.caption(f"🚀 التحديث القادم: {next_t}")
+    if st.button("🔄 تحديث يدوي الآن", key="manual_auto_refresh"):
+        st.session_state.auto_scraping_started = False
+        st.rerun()
 
     # حالة المعالجة — تحديث حي مع auto-rerun
     if st.session_state.job_id:

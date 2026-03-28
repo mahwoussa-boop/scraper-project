@@ -1,9 +1,10 @@
 """
-Async competitor sitemap scraper v28.0
+Async competitor sitemap scraper v29.0
 ═══════════════════════════════════════
-✅ v28: دعم استئناف الكشط (Resume) وحفظ الحالة التلقائي
-✅ دعم الأتمتة الخلفية مع حفظ التقدم في scraper_progress.json
+✅ v29: دعم استئناف الكشط لعدد ضخم من المنتجات (Resume)
+✅ حفظ الحالة في scraper_state.json لضمان الاستمرارية
 ✅ تنظيف السعر والنصوص بدقة 0% أخطاء
+✅ دعم sitemap_resolve لضمان العثور على روابط Sitemap صالحة
 """
 from __future__ import annotations
 
@@ -29,7 +30,6 @@ logger = logging.getLogger(__name__)
 
 # ملفات الحالة للأتمتة
 SCRAPER_STATE_JSON = os.path.join("data", "scraper_state.json")
-SCRAPER_PROGRESS_JSON = os.path.join("data", "scraper_progress.json")
 COMPETITORS_LATEST_CSV = os.path.join("data", "competitors_latest.csv")
 
 _BROWSER_HEADERS = {
@@ -92,7 +92,7 @@ def _save_competitor_csv_rows(rows: List[Dict[str, Any]]) -> int:
 # ── محرك الكشط ──────────────────────────
 
 class AsyncCompetitorScraper:
-    def __init__(self, concurrency_limit: int = 15):
+    def __init__(self, concurrency_limit: int = 20):
         self.concurrency_limit = concurrency_limit
         self.semaphore = asyncio.Semaphore(concurrency_limit)
 
@@ -102,7 +102,13 @@ class AsyncCompetitorScraper:
             async with session.get(url, timeout=30, headers=_BROWSER_HEADERS) as resp:
                 if resp.status != 200: return []
                 text = await resp.text()
-                root = ET.fromstring(text)
+                # معالجة XML
+                try:
+                    root = ET.fromstring(text)
+                except:
+                    # محاولة بسيطة إذا فشل ET
+                    return re.findall(r'<loc>(https?://[^<]+)</loc>', text)
+                
                 for el in root.iter():
                     tag = el.tag.split("}")[-1]
                     if tag == "loc" and el.text:
@@ -128,7 +134,6 @@ class AsyncCompetitorScraper:
                     for script in soup.find_all("script", type="application/ld+json"):
                         try:
                             data = json.loads(script.string)
-                            # Handle @graph or list
                             nodes = data.get("@graph", [data]) if isinstance(data, dict) else data
                             for node in nodes:
                                 if node.get("@type") in ("Product", "ProductGroup"):
@@ -144,13 +149,28 @@ class AsyncCompetitorScraper:
                                             "comp_url": url, "sku": node.get("sku") or hashlib.md5(url.encode()).hexdigest()[:10]
                                         }
                         except: continue
+                    
+                    # Fallback to Meta tags
+                    name = soup.find("meta", property="og:title")
+                    price = soup.find("meta", property="product:price:amount")
+                    if name and price:
+                        p_val = _clean_price(price.get("content"))
+                        if p_val:
+                            return {
+                                "name": _clean_text(name.get("content")), "price": p_val,
+                                "brand": "", "image_url": "", "comp_url": url,
+                                "sku": hashlib.md5(url.encode()).hexdigest()[:10]
+                            }
             except: pass
             return None
 
 async def run_scraper(sitemap_urls: List[str], progress_callback=None, force_new=False):
     state = load_scraper_state()
     
-    # إذا كان هناك طلب لبدء جديد أو لم تكن هناك روابط مخزنة
+    # روابط تصفية المنتجات
+    def is_product_url(u):
+        return any(x in u for x in ["/p/", "/product/", "/products/"])
+
     if force_new or not state.get("urls_to_scrape"):
         if progress_callback: progress_callback("🔍 جاري فحص الروابط وجمع المنتجات...", 0.05)
         async with aiohttp.ClientSession() as session:
@@ -158,7 +178,7 @@ async def run_scraper(sitemap_urls: List[str], progress_callback=None, force_new
             all_urls = []
             for s_url in sitemap_urls:
                 urls = await scraper.scan_sitemap(session, s_url)
-                all_urls.extend([u for u in urls if "/p/" in u or "/product/" in u or "/products/" in u])
+                all_urls.extend([u for u in urls if is_product_url(u)])
             
             state["urls_to_scrape"] = list(dict.fromkeys(all_urls))
             state["scraped_urls"] = []
@@ -172,24 +192,30 @@ async def run_scraper(sitemap_urls: List[str], progress_callback=None, force_new
         return len(state["results"]), state["results"]
 
     async with aiohttp.ClientSession() as session:
-        scraper = AsyncCompetitorScraper(concurrency_limit=20)
+        scraper = AsyncCompetitorScraper(concurrency_limit=25)
         
-        for i, url in enumerate(to_scrape):
-            res = await scraper.fetch_product(session, url)
-            state["scraped_urls"].append(url)
-            if res:
-                state["results"].append(res)
+        # تقسيم العمل إلى دفعات صغيرة لضمان الحفظ المستمر
+        batch_size = 20
+        for i in range(0, len(to_scrape), batch_size):
+            batch = to_scrape[i:i+batch_size]
+            tasks = [scraper.fetch_product(session, url) for url in batch]
+            batch_results = await asyncio.gather(*tasks)
             
-            # حفظ الحالة كل 10 منتجات
-            if i % 10 == 0 or i == len(to_scrape) - 1:
-                save_scraper_state(state)
-                _save_competitor_csv_rows(state["results"])
-                if progress_callback:
-                    prog = 0.1 + (0.9 * (len(state["scraped_urls"]) / total))
-                    progress_callback(f"تم كشط {len(state['results'])} منتج من {total}...", prog)
+            for url, res in zip(batch, batch_results):
+                state["scraped_urls"].append(url)
+                if res:
+                    state["results"].append(res)
+            
+            # حفظ الحالة بعد كل دفعة
+            save_scraper_state(state)
+            _save_competitor_csv_rows(state["results"])
+            
+            if progress_callback:
+                prog = 0.1 + (0.9 * (len(state["scraped_urls"]) / total))
+                progress_callback(f"تم كشط {len(state['results'])} منتج من {total}...", prog)
             
             # تأخير بسيط لتجنب الحظر
-            if i % 50 == 0: await asyncio.sleep(1)
+            await asyncio.sleep(0.5)
 
     count = _save_competitor_csv_rows(state["results"])
     return count, state["results"]
