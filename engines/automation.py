@@ -19,7 +19,7 @@ from typing import List, Dict, Optional, Tuple
 # استيراد المكونات اللازمة
 from scraper import run_scraper, load_scraper_state
 from engines.engine import run_full_analysis, find_missing_products, read_file
-from utils.db_manager import upsert_our_catalog, upsert_comp_catalog, save_job_progress, get_last_job
+from utils.db_manager import upsert_our_catalog, upsert_comp_catalog, save_job_progress, get_last_job, get_processed_keys
 
 # إعدادات الأتمتة
 AUTOMATION_STATE_FILE = "data/automation_state.json"
@@ -148,8 +148,19 @@ class GlobalAutomationManager:
                     if not partial_comp_df.empty:
                         comp_dfs = {"المنافسين_المكشوطين": partial_comp_df}
                         # تشغيل المقارنة على البيانات المتوفرة حالياً
-                        self.current_analysis_df = run_full_analysis(our_df, comp_dfs)
-                        self.current_missing_df = find_missing_products(our_df, comp_dfs)
+                        full_df = run_full_analysis(our_df, comp_dfs)
+                        full_miss = find_missing_products(our_df, comp_dfs)
+                        
+                        # استبعاد المنتجات المعالجة (الأرشيف)
+                        processed_keys = get_processed_keys()
+                        if processed_keys:
+                            if not full_df.empty:
+                                full_df = full_df[~full_df["sku"].astype(str).isin(processed_keys)]
+                            if not full_miss.empty:
+                                full_miss = full_miss[~full_miss["sku"].astype(str).isin(processed_keys)]
+                        
+                        self.current_analysis_df = full_df
+                        self.current_missing_df = full_miss
                 except: pass
 
         count, scraped_rows = loop.run_until_complete(run_scraper(sitemap_urls, progress_callback=scraper_progress))
