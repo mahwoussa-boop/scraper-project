@@ -228,15 +228,21 @@ elif page == "📂 رفع الملفات":
         if not err:
             st.session_state.our_df = our_df
             # حفظ الملف محلياً لاستخدامه في الأتمتة
-            our_df.to_csv("data/our_products.csv", index=False)
+            os.makedirs("data", exist_ok=True)
+            our_df_path = "data/our_products.csv"
+            our_df.to_csv(our_df_path, index=False)
             st.success("✅ تم تحميل ملف متجر مهووس بنجاح!")
             
-            # إذا كانت الأتمتة لا تعمل، نبدأها تلقائياً
+            # تحديث محرك الأتمتة بالملف الجديد وبدء المقارنة فوراً
+            sitemaps = SITEMAP_URLS_DEFAULT.split("\n") if 'SITEMAP_URLS_DEFAULT' in globals() else ["https://saeedsalah.com/sitemap.xml"]
             if not automation_manager.is_running:
-                sitemaps = SITEMAP_URLS_DEFAULT.split("\n") if 'SITEMAP_URLS_DEFAULT' in globals() else ["https://saeedsalah.com/sitemap.xml"]
-                automation_manager.start_automation(sitemaps)
-                st.info("🚀 تم بدء المقارنة التلقائية مع المنافسين...")
-                st.rerun()
+                automation_manager.start_automation(sitemaps, our_file_path=our_df_path)
+                st.info("🚀 تم بدء الكشط والمقارنة التلقائية مع المنافسين...")
+            else:
+                # إذا كانت الأتمتة تعمل بالفعل، نقوم بتحديث مسار الملف لتبدأ المقارنة اللحظية بالملف الجديد
+                st.info("🔄 جاري تحديث المقارنة اللحظية بملف المتجر الجديد...")
+            
+            st.rerun()
     
     if st.button("🔄 إعادة تشغيل الأتمتة يدوياً"):
         sitemaps = SITEMAP_URLS_DEFAULT.split("\n") if 'SITEMAP_URLS_DEFAULT' in globals() else ["https://saeedsalah.com/sitemap.xml"]
