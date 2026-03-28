@@ -912,9 +912,10 @@ if page == "📊 لوحة التحكم":
     
     # محاولة قراءة الملف المحدث لحظة بلحظة
     live_scraped_df = pd.DataFrame()
-    if os.path.exists("data/competitors_latest.csv"):
+    latest_csv = "data/competitors_latest.csv"
+    if os.path.exists(latest_csv):
         try:
-            live_scraped_df = pd.read_csv("data/competitors_latest.csv")
+            live_scraped_df = pd.read_csv(latest_csv)
         except: pass
 
     if not live_scraped_df.empty:
@@ -922,25 +923,42 @@ if page == "📊 لوحة التحكم":
         ls1, ls2, ls3 = st.columns(3)
         ls1.metric("📦 إجمالي المنتجات", f"{len(live_scraped_df)}")
         ls2.metric("🏷️ الماركات المكتشفة", f"{live_scraped_df['الماركة'].nunique() if 'الماركة' in live_scraped_df.columns else 0}")
-        ls3.metric("💰 متوسط الأسعار", f"{live_scraped_df['السعر'].mean() if 'السعر' in live_scraped_df.columns else 0:.0f} ر.س")
+        
+        # حساب متوسط السعر بأمان
+        avg_price = 0
+        if 'السعر' in live_scraped_df.columns:
+            prices = pd.to_numeric(live_scraped_df['السعر'], errors='coerce').dropna()
+            avg_price = prices.mean() if not prices.empty else 0
+        ls3.metric("💰 متوسط الأسعار", f"{avg_price:.0f} ر.س")
         
         # جدول حي بدقة عالية
-        d_cols = ["اسم المنتج", "السعر", "الماركة", "sku", "رابط_المنتج"]
+        d_cols = ["اسم المنتج", "السعر", "الماركة", "sku", "رابط_المنتج", "رابط_الصورة"]
         actual_cols = [c for c in d_cols if c in live_scraped_df.columns]
         
-        st.dataframe(live_scraped_df[actual_cols].sort_index(ascending=False).head(500), 
-                     use_container_width=True, height=400)
+        st.dataframe(
+            live_scraped_df[actual_cols].sort_index(ascending=False).head(1000), 
+            use_container_width=True, 
+            height=500,
+            column_config={
+                "رابط_الصورة": st.column_config.ImageColumn("📸 الصورة"),
+                "رابط_المنتج": st.column_config.LinkColumn("🔗 الرابط")
+            }
+        )
         
-        # تفعيل التحديث التلقائي للواجهة أثناء عمل الكاشط
-        if automation_manager.is_running and "🕷️" in automation_manager.current_status:
+        # تفعيل التحديث التلقائي للواجهة أثناء عمل الكاشط أو المقارنة
+        if automation_manager.is_running:
             try:
                 from streamlit_autorefresh import st_autorefresh
                 st_autorefresh(interval=5000, key="live_scraping_refresh")
             except:
-                time.sleep(5)
-                st.rerun()
+                pass
     else:
-        st.warning("⚠️ لم يتم استخراج أي منتجات بعد. يرجى الانتظار حتى يبدأ الكاشط بسحب البيانات.")
+        st.warning("⚠️ جاري سحب البيانات... يرجى الانتظار حتى تظهر أول المنتجات.")
+        if automation_manager.is_running:
+            try:
+                from streamlit_autorefresh import st_autorefresh
+                st_autorefresh(interval=5000, key="live_scraping_wait")
+            except: pass
     st.markdown("---")
 
     if st.session_state.results:
