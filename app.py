@@ -907,30 +907,40 @@ if page == "📊 لوحة التحكم":
     if automation_manager.is_running:
         st.progress(automation_manager.progress, text="جاري تنفيذ دورة الأتمتة...")
 
-    # عرض نتائج آخر عملية كشط (سواء يدوية أو آليّة)
-    scraped_data = st.session_state.get("last_scraped_data")
-    if not scraped_data and os.path.exists("data/competitors_latest.csv"):
+    # v30: عرض حي ومباشر لنتائج الكشط (Real-time Display)
+    st.markdown("#### 🕷️ المنتجات المستخرجة مباشرة")
+    
+    # محاولة قراءة الملف المحدث لحظة بلحظة
+    live_scraped_df = pd.DataFrame()
+    if os.path.exists("data/competitors_latest.csv"):
         try:
-            scraped_df = pd.read_csv("data/competitors_latest.csv")
-            if not scraped_df.empty:
-                scraped_data = scraped_df.to_dict("records")
+            live_scraped_df = pd.read_csv("data/competitors_latest.csv")
         except: pass
 
-    if scraped_data:
-        with st.expander("🕷️ تفاصيل آخر منتجات مكشوطة", expanded=True):
-            scraped_df = pd.DataFrame(scraped_data)
-            # ملخص سريع
-            ms1, ms2, ms3 = st.columns(3)
-            ms1.metric("📦 إجمالي المنتجات", f"{len(scraped_df)}")
-            ms2.metric("🏷️ الماركات المكتشفة", f"{scraped_df['الماركة'].nunique() if 'الماركة' in scraped_df.columns else scraped_df['brand'].nunique() if 'brand' in scraped_df.columns else 0}")
-            ms3.metric("💰 متوسط الأسعار", f"{scraped_df['السعر'].mean() if 'السعر' in scraped_df.columns else scraped_df['price'].mean() if 'price' in scraped_df.columns else 0:.0f} ر.س")
-            
-            # جدول مختصر بدقة
-            d_cols = ["اسم المنتج", "السعر", "الماركة", "sku", "رابط_المنتج"]
-            d_cols_alt = ["name", "price", "brand", "sku", "comp_url"]
-            actual_cols = [c for c in d_cols if c in scraped_df.columns] or [c for c in d_cols_alt if c in scraped_df.columns]
-            
-            st.dataframe(scraped_df[actual_cols].head(100), use_container_width=True, height=300)
+    if not live_scraped_df.empty:
+        # ملخص حي
+        ls1, ls2, ls3 = st.columns(3)
+        ls1.metric("📦 إجمالي المنتجات", f"{len(live_scraped_df)}")
+        ls2.metric("🏷️ الماركات المكتشفة", f"{live_scraped_df['الماركة'].nunique() if 'الماركة' in live_scraped_df.columns else 0}")
+        ls3.metric("💰 متوسط الأسعار", f"{live_scraped_df['السعر'].mean() if 'السعر' in live_scraped_df.columns else 0:.0f} ر.س")
+        
+        # جدول حي بدقة عالية
+        d_cols = ["اسم المنتج", "السعر", "الماركة", "sku", "رابط_المنتج"]
+        actual_cols = [c for c in d_cols if c in live_scraped_df.columns]
+        
+        st.dataframe(live_scraped_df[actual_cols].sort_index(ascending=False).head(500), 
+                     use_container_width=True, height=400)
+        
+        # تفعيل التحديث التلقائي للواجهة أثناء عمل الكاشط
+        if automation_manager.is_running and "🕷️" in automation_manager.current_status:
+            try:
+                from streamlit_autorefresh import st_autorefresh
+                st_autorefresh(interval=5000, key="live_scraping_refresh")
+            except:
+                time.sleep(5)
+                st.rerun()
+    else:
+        st.warning("⚠️ لم يتم استخراج أي منتجات بعد. يرجى الانتظار حتى يبدأ الكاشط بسحب البيانات.")
     st.markdown("---")
 
     if st.session_state.results:

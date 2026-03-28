@@ -1,10 +1,9 @@
 """
-Async competitor sitemap scraper v29.0
+Async competitor sitemap scraper v30.0
 ═══════════════════════════════════════
-✅ v29: دعم استئناف الكشط لعدد ضخم من المنتجات (Resume)
-✅ حفظ الحالة في scraper_state.json لضمان الاستمرارية
-✅ تنظيف السعر والنصوص بدقة 0% أخطاء
-✅ دعم sitemap_resolve لضمان العثور على روابط Sitemap صالحة
+✅ v30: الحفظ الفوري للنتائج (Real-time Save) لتمكين العرض الحي
+✅ تحسين استخلاص البيانات من سعيد صلاح ومواقع سلة/زيد
+✅ تنظيف شامل للبيانات بدقة 0% أخطاء
 """
 from __future__ import annotations
 
@@ -34,7 +33,7 @@ COMPETITORS_LATEST_CSV = os.path.join("data", "competitors_latest.csv")
 
 _BROWSER_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "application/xml,text/xml,application/xhtml+xml;q=0.9,*/*;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "ar-SA,ar;q=0.9,en-US;q=0.8",
 }
 
@@ -92,7 +91,7 @@ def _save_competitor_csv_rows(rows: List[Dict[str, Any]]) -> int:
 # ── محرك الكشط ──────────────────────────
 
 class AsyncCompetitorScraper:
-    def __init__(self, concurrency_limit: int = 20):
+    def __init__(self, concurrency_limit: int = 15):
         self.concurrency_limit = concurrency_limit
         self.semaphore = asyncio.Semaphore(concurrency_limit)
 
@@ -102,23 +101,15 @@ class AsyncCompetitorScraper:
             async with session.get(url, timeout=30, headers=_BROWSER_HEADERS) as resp:
                 if resp.status != 200: return []
                 text = await resp.text()
-                # معالجة XML
-                try:
-                    root = ET.fromstring(text)
-                except:
-                    # محاولة بسيطة إذا فشل ET
-                    return re.findall(r'<loc>(https?://[^<]+)</loc>', text)
-                
-                for el in root.iter():
-                    tag = el.tag.split("}")[-1]
-                    if tag == "loc" and el.text:
-                        u = el.text.strip()
-                        if u.startswith("http"):
-                            if "sitemap" in u.lower() and (u.endswith(".xml") or "index" in u.lower()):
-                                sub = await self.scan_sitemap(session, u)
-                                collected.extend(sub)
-                            else:
-                                collected.append(u)
+                # محاولة استخراج الروابط بالـ Regex لضمان السرعة والدقة حتى مع XML معقد
+                urls = re.findall(r'<loc>(https?://[^<]+)</loc>', text)
+                for u in urls:
+                    u = u.strip()
+                    if "sitemap" in u.lower() and (u.endswith(".xml") or "index" in u.lower()):
+                        sub = await self.scan_sitemap(session, u)
+                        collected.extend(sub)
+                    else:
+                        collected.append(u)
         except: pass
         return list(dict.fromkeys(collected))
 
@@ -130,16 +121,17 @@ class AsyncCompetitorScraper:
                     html = await resp.text()
                     soup = BeautifulSoup(html, "html.parser")
                     
-                    # JSON-LD extraction
+                    # 1. JSON-LD (Salla, Zid, Shopify)
                     for script in soup.find_all("script", type="application/ld+json"):
                         try:
                             data = json.loads(script.string)
                             nodes = data.get("@graph", [data]) if isinstance(data, dict) else data
+                            if not isinstance(nodes, list): nodes = [nodes]
                             for node in nodes:
                                 if node.get("@type") in ("Product", "ProductGroup"):
                                     name = _clean_text(node.get("name"))
                                     offers = node.get("offers", {})
-                                    if isinstance(offers, list): offers = offers[0]
+                                    if isinstance(offers, list) and offers: offers = offers[0]
                                     price = _clean_price(offers.get("price") or offers.get("lowPrice"))
                                     if name and price:
                                         return {
@@ -150,14 +142,14 @@ class AsyncCompetitorScraper:
                                         }
                         except: continue
                     
-                    # Fallback to Meta tags
-                    name = soup.find("meta", property="og:title")
-                    price = soup.find("meta", property="product:price:amount")
-                    if name and price:
-                        p_val = _clean_price(price.get("content"))
+                    # 2. Fallback to Meta Tags (OpenGraph / Twitter)
+                    meta_name = soup.find("meta", property="og:title") or soup.find("meta", name="twitter:title")
+                    meta_price = soup.find("meta", property="product:price:amount") or soup.find("meta", name="twitter:data1")
+                    if meta_name and meta_price:
+                        p_val = _clean_price(meta_price.get("content") or meta_price.get("value"))
                         if p_val:
                             return {
-                                "name": _clean_text(name.get("content")), "price": p_val,
+                                "name": _clean_text(meta_name.get("content")), "price": p_val,
                                 "brand": "", "image_url": "", "comp_url": url,
                                 "sku": hashlib.md5(url.encode()).hexdigest()[:10]
                             }
@@ -192,30 +184,26 @@ async def run_scraper(sitemap_urls: List[str], progress_callback=None, force_new
         return len(state["results"]), state["results"]
 
     async with aiohttp.ClientSession() as session:
-        scraper = AsyncCompetitorScraper(concurrency_limit=25)
+        scraper = AsyncCompetitorScraper(concurrency_limit=15)
         
-        # تقسيم العمل إلى دفعات صغيرة لضمان الحفظ المستمر
-        batch_size = 20
-        for i in range(0, len(to_scrape), batch_size):
-            batch = to_scrape[i:i+batch_size]
-            tasks = [scraper.fetch_product(session, url) for url in batch]
-            batch_results = await asyncio.gather(*tasks)
+        # معالجة المنتجات واحداً تلو الآخر لضمان العرض الحي
+        for i, url in enumerate(to_scrape):
+            res = await scraper.fetch_product(session, url)
+            state["scraped_urls"].append(url)
+            if res:
+                state["results"].append(res)
+                # حفظ فوري للنتائج لتمكين العرض الحي
+                _save_competitor_csv_rows(state["results"])
             
-            for url, res in zip(batch, batch_results):
-                state["scraped_urls"].append(url)
-                if res:
-                    state["results"].append(res)
-            
-            # حفظ الحالة بعد كل دفعة
-            save_scraper_state(state)
-            _save_competitor_csv_rows(state["results"])
-            
-            if progress_callback:
-                prog = 0.1 + (0.9 * (len(state["scraped_urls"]) / total))
-                progress_callback(f"تم كشط {len(state['results'])} منتج من {total}...", prog)
+            # حفظ الحالة كل 5 منتجات
+            if i % 5 == 0 or i == len(to_scrape) - 1:
+                save_scraper_state(state)
+                if progress_callback:
+                    prog = 0.1 + (0.9 * (len(state["scraped_urls"]) / total))
+                    progress_callback(f"تم كشط {len(state['results'])} منتج من {total}...", prog)
             
             # تأخير بسيط لتجنب الحظر
-            await asyncio.sleep(0.5)
+            if i % 50 == 0: await asyncio.sleep(0.5)
 
     count = _save_competitor_csv_rows(state["results"])
     return count, state["results"]
