@@ -1,7 +1,8 @@
 """
-engines/automation.py v29.0 — محرك الأتمتة الشامل (24 ساعة)
+engines/automation.py v35.0 — محرك الأتمتة الشامل (24 ساعة) مع المقارنة اللحظية
 ═══════════════════════════════════════════════════════════
 ✅ كشط ومقارنة تلقائية كل 24 ساعة بدقة 0% أخطاء
+✅ الربط اللحظي (On-the-fly): مقارنة كل دفعة مكشوطة فوراً وتوزيعها على الأقسام
 ✅ استئناف ذكي للكشط (Resume) وحفظ الحالة
 ✅ توزيع النتائج على الأقسام (سعر أقل، مفقودة، مراجعة...)
 ✅ ربط ملف متجر مهووس المرفوع بالأتمتة
@@ -46,6 +47,8 @@ class GlobalAutomationManager:
         self.error_msg = None
         self.thread = None
         self.stop_event = threading.Event()
+        self.current_analysis_df = pd.DataFrame() # تخزين نتائج المقارنة اللحظية
+        self.current_missing_df = pd.DataFrame()
         self.load_state()
 
     def load_state(self):
@@ -89,7 +92,6 @@ class GlobalAutomationManager:
         while not self.stop_event.is_set():
             now = datetime.now()
             
-            # التحقق مما إذا كان يجب التشغيل (أول مرة أو بعد 24 ساعة)
             should_run = False
             if not self.last_run_time:
                 should_run = True
@@ -108,21 +110,47 @@ class GlobalAutomationManager:
                     self.error_msg = str(e)
                     self.current_status = f"خطأ: {str(e)[:100]}"
             
-            # الانتظار لمدة 5 دقائق قبل التحقق التالي
             self.stop_event.wait(300)
 
     def _execute_full_cycle(self, sitemap_urls, our_file_path):
-        """تنفيذ دورة كاملة: كشط -> مقارنة -> حفظ"""
-        self.current_status = "🕷️ جاري الكشط المستمر..."
+        """تنفيذ دورة كاملة مع مقارنة لحظية (On-the-fly)"""
+        self.current_status = "🕷️ جاري الكشط والمقارنة اللحظية..."
         self.progress = 0.05
         
-        # 1. الكشط (Scraping)
+        # 1. تحميل ملف متجرنا (المرجع للمقارنة اللحظية)
+        our_df = pd.DataFrame()
+        if not our_file_path:
+            last_job = get_last_job()
+            if last_job and last_job.get("our_file"):
+                our_file_path = os.path.join("data", last_job["our_file"])
+
+        if our_file_path and os.path.exists(our_file_path):
+            our_df, err = read_file(our_file_path)
+            if not err and not our_df.empty:
+                upsert_our_catalog(our_df, name_col="اسم المنتج", id_col="رقم المنتج", price_col="السعر")
+            else:
+                self.current_status = f"❌ خطأ في ملف المتجر: {err or 'ملف فارغ'}"
+                return
+
+        # 2. الكشط مع مقارنة فورية لكل دفعة
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
         def scraper_progress(msg, p):
             self.current_status = msg
-            self.progress = p * 0.4 # الكشط يمثل 40% من العملية
+            self.progress = p * 0.9 # الكشط والمقارنة يمثلان 90%
+            
+            # محاولة قراءة النتائج الجزئية وإجراء مقارنة فورية
+            RESULTS_FILE = "data/competitors_latest.csv"
+            if os.path.exists(RESULTS_FILE) and not our_df.empty:
+                try:
+                    partial_comp_df = pd.read_csv(RESULTS_FILE)
+                    if not partial_comp_df.empty:
+                        comp_dfs = {"المنافسين_المكشوطين": partial_comp_df}
+                        # تشغيل المقارنة على البيانات المتوفرة حالياً
+                        self.current_analysis_df = run_full_analysis(our_df, comp_dfs)
+                        self.current_missing_df = find_missing_products(our_df, comp_dfs)
+                except: pass
 
         count, scraped_rows = loop.run_until_complete(run_scraper(sitemap_urls, progress_callback=scraper_progress))
         
@@ -130,58 +158,26 @@ class GlobalAutomationManager:
             self.current_status = "⚠️ لم يتم العثور على منتجات للكشط"
             return
 
-        # 2. تحميل ملف متجرنا (إذا توفر)
-        our_df = pd.DataFrame()
-        if not our_file_path:
-            # محاولة العثور على آخر ملف متجر تم رفعه من قاعدة البيانات
-            last_job = get_last_job()
-            if last_job and last_job.get("our_file"):
-                our_file_path = os.path.join("data", last_job["our_file"])
-
-        if our_file_path and os.path.exists(our_file_path):
-            self.current_status = f"📂 قراءة ملف المتجر: {os.path.basename(our_file_path)}"
-            our_df, err = read_file(our_file_path)
-            if err:
-                self.current_status = f"❌ خطأ في ملف المتجر: {err}"
-                return
-
-        if our_df.empty:
-            self.current_status = "✅ اكتمل الكشط (لا يوجد ملف متجر للمقارنة)"
-            return
-
-        # 3. المقارنة (Analysis)
-        self.current_status = "🤖 جاري المقارنة الذكية وتوزيع الأقسام..."
-        self.progress = 0.5
-        
-        comp_df = pd.DataFrame(scraped_rows)
-        comp_dfs = {"المنافسين_المكشوطين": comp_df}
-        
-        # تحديث الكتالوج في قاعدة البيانات
-        upsert_our_catalog(our_df, name_col="اسم المنتج", id_col="رقم المنتج", price_col="السعر")
-        upsert_comp_catalog(comp_dfs)
-        
-        # تشغيل التحليل الذكي
-        analysis_df = run_full_analysis(our_df, comp_dfs)
-        missing_df = find_missing_products(our_df, comp_dfs)
-        
-        # 4. الحفظ النهائي (Save)
+        # 3. الحفظ النهائي (Save)
         self.current_status = "💾 حفظ النتائج النهائية..."
-        self.progress = 0.9
+        self.progress = 0.95
         
         job_id = f"auto_{datetime.now().strftime('%Y%m%d_%H%M')}"
-        # تحويل النتائج لصيغة آمنة للحفظ
         from app import _safe_results_for_json
-        safe_records = _safe_results_for_json(analysis_df.to_dict("records"))
-        safe_missing = missing_df.to_dict("records") if not missing_df.empty else []
+        
+        # استخدام النتائج النهائية من المقارنة
+        final_analysis = self.current_analysis_df.to_dict("records") if not self.current_analysis_df.empty else []
+        final_missing = self.current_missing_df.to_dict("records") if not self.current_missing_df.empty else []
         
         save_job_progress(
             job_id, len(our_df), len(our_df),
-            safe_records, "done",
-            os.path.basename(our_file_path), "Auto Scraper",
-            missing=safe_missing
+            _safe_results_for_json(final_analysis), "done",
+            os.path.basename(our_file_path) if our_file_path else "unknown", 
+            "Auto Scraper",
+            missing=final_missing
         )
         
-        self.current_status = f"✅ اكتملت الدورة بنجاح ({len(analysis_df)} منتج)"
+        self.current_status = f"✅ اكتملت الدورة بنجاح ({len(final_analysis)} منتج مطابق)"
         self.progress = 1.0
 
 # نسخة عالمية واحدة
