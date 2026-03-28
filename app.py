@@ -87,6 +87,15 @@ for k, v in _defaults.items():
 # إنشاء المجلدات المطلوبة إذا لم تكن موجودة
 os.makedirs("data", exist_ok=True)
 
+# استرجاع ملف متجر مهووس تلقائياً إذا كان موجوداً مسبقاً
+OUR_PRODUCTS_PATH = "data/our_products.csv"
+if "our_df" not in st.session_state and os.path.exists(OUR_PRODUCTS_PATH):
+    try:
+        our_df, err = read_file(OUR_PRODUCTS_PATH)
+        if not err:
+            st.session_state.our_df = our_df
+    except: pass
+
 # تحميل المنتجات المخفية
 _db_hidden = get_hidden_product_keys()
 st.session_state.hidden_products = st.session_state.hidden_products | _db_hidden
@@ -223,23 +232,29 @@ elif page == "📂 رفع الملفات":
     our_file = st.file_uploader("📦 ملف منتجاتنا (CSV/Excel)", type=["csv","xlsx","xls"], key="our_file")
     selected_comps = st.multiselect("اختر المنافسين للكشط", ["سعيد صلاح", "نايس ون", "وجوه", "سيفورا"], default=["سعيد صلاح"])
     
+    # عرض حالة الملف المحفوظ
+    if "our_df" in st.session_state:
+        st.success(f"✅ ملف متجر مهووس محمل حالياً ({len(st.session_state.our_df)} منتج)")
+        if st.button("🗑️ حذف الملف ورفع ملف جديد"):
+            if os.path.exists(OUR_PRODUCTS_PATH): os.remove(OUR_PRODUCTS_PATH)
+            del st.session_state.our_df
+            st.rerun()
+
     if our_file:
         our_df, err = read_file(our_file)
         if not err:
             st.session_state.our_df = our_df
-            # حفظ الملف محلياً لاستخدامه في الأتمتة
+            # حفظ الملف محلياً بشكل دائم
             os.makedirs("data", exist_ok=True)
-            our_df_path = "data/our_products.csv"
-            our_df.to_csv(our_df_path, index=False)
-            st.success("✅ تم تحميل ملف متجر مهووس بنجاح!")
+            our_df.to_csv(OUR_PRODUCTS_PATH, index=False)
+            st.success("✅ تم حفظ ملف متجر مهووس بنجاح!")
             
             # تحديث محرك الأتمتة بالملف الجديد وبدء المقارنة فوراً
             sitemaps = SITEMAP_URLS_DEFAULT.split("\n") if 'SITEMAP_URLS_DEFAULT' in globals() else ["https://saeedsalah.com/sitemap.xml"]
             if not automation_manager.is_running:
-                automation_manager.start_automation(sitemaps, our_file_path=our_df_path)
+                automation_manager.start_automation(sitemaps, our_file_path=OUR_PRODUCTS_PATH)
                 st.info("🚀 تم بدء الكشط والمقارنة التلقائية مع المنافسين...")
             else:
-                # إذا كانت الأتمتة تعمل بالفعل، نقوم بتحديث مسار الملف لتبدأ المقارنة اللحظية بالملف الجديد
                 st.info("🔄 جاري تحديث المقارنة اللحظية بملف المتجر الجديد...")
             
             st.rerun()
