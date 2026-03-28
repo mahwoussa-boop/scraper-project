@@ -45,7 +45,7 @@ from engines.ai_engine import (call_ai, gemini_chat, chat_with_ai,
 from engines.automation import (AutomationEngine, ScheduledSearchManager,
                                  auto_push_decisions, auto_process_review_items,
                                  log_automation_decision, get_automation_log,
-                                 get_automation_stats)
+                                 get_automation_stats, automation_manager)
 from utils.helpers import (apply_filters, get_filter_options, export_to_excel,
                             export_multiple_sheets, parse_pasted_text,
                             safe_float, format_price, format_diff)
@@ -85,6 +85,7 @@ _defaults = {
     "our_df": None, "comp_dfs": None,  # حفظ الملفات للمنتجات المفقودة
     "hidden_products": set(),  # منتجات أُرسلت لـ Make أو أُزيلت
     "last_scraped_data": None, # v27: نتائج آخر عملية كشط
+    "auto_scraping_started": False,
 }
 for k, v in _defaults.items():
     if k not in st.session_state:
@@ -769,6 +770,30 @@ with st.sidebar:
                 except:
                     st.warning(f"❌ {key_name} غير موجود")
 
+    # v28: بدء الأتمتة التلقائية عند فتح التطبيق
+    if not st.session_state.auto_scraping_started:
+        # روابط المنافسين الافتراضية (يمكن تعديلها من واجهة الكشط)
+        default_sitemaps = [url.strip() for url in SITEMAP_URLS_DEFAULT.split("\n") if url.strip()]
+        # محاولة العثور على آخر ملف متجر تم رفعه
+        last_job = get_last_job()
+        our_file = None
+        if last_job and last_job.get("our_file"):
+            our_file = os.path.join("data", last_job["our_file"])
+        
+        automation_manager.start_automation(default_sitemaps, our_file)
+        st.session_state.auto_scraping_started = True
+
+    # عرض حالة الأتمتة في القائمة الجانبية
+    st.markdown("---")
+    st.markdown(f"**🤖 حالة الأتمتة (24س):**")
+    status_color = "#00C853" if "✅" in automation_manager.current_status else "#FFD600" if "🕷️" in automation_manager.current_status else "#888"
+    st.markdown(f'<div style="font-size:.8rem; color:{status_color}">● {automation_manager.current_status}</div>', unsafe_allow_html=True)
+    if automation_manager.is_running:
+        st.progress(automation_manager.progress)
+    if automation_manager.next_run_time:
+        next_t = datetime.fromisoformat(automation_manager.next_run_time).strftime("%H:%M")
+        st.caption(f"التحديث القادم: {next_t}")
+
     # حالة المعالجة — تحديث حي مع auto-rerun
     if st.session_state.job_id:
         job = get_job_progress(st.session_state.job_id)
@@ -857,25 +882,48 @@ if page == "📊 لوحة التحكم":
         }).head(200), use_container_width=True, height=200)
         st.markdown("---")
 
-    # v27: عرض نتائج آخر عملية كشط
-    if st.session_state.get("last_scraped_data"):
-        st.markdown("#### 🕷️ آخر عملية كشط (الذاكرة المؤقتة)")
-        scraped_df = pd.DataFrame(st.session_state.last_scraped_data)
-        
-        # ملخص سريع
-        s1, s2, s3 = st.columns(3)
-        s1.metric("📦 عدد المنتجات", f"{len(scraped_df)}")
-        s2.metric("🏷️ عدد الماركات", f"{scraped_df['brand'].nunique() if 'brand' in scraped_df.columns else 0}")
-        s3.metric("💰 متوسط السعر", f"{scraped_df['price'].mean():.0f} ر.س" if 'price' in scraped_df.columns else "0")
-        
-        # جدول مختصر بدقة
-        display_cols = ["name", "price", "brand", "sku", "comp_url"]
-        display_cols = [c for c in display_cols if c in scraped_df.columns]
-        st.dataframe(scraped_df[display_cols].rename(columns={
-            "name": "المنتج", "price": "السعر", "brand": "الماركة", 
-            "sku": "SKU", "comp_url": "الرابط"
-        }), use_container_width=True, height=250)
-        st.markdown("---")
+    # v28: عرض حالة الأتمتة ونتائج الكشط في لوحة التحكم
+    st.markdown("#### 🤖 نظام الأتمتة الذكي (كل 24 ساعة)")
+    as1, as2, as3 = st.columns([2,1,1])
+    with as1:
+        st.info(f"**الحالة الحالية:** {automation_manager.current_status}")
+    with as2:
+        if automation_manager.last_run_time:
+            last_t = datetime.fromisoformat(automation_manager.last_run_time).strftime("%m/%d %H:%M")
+            st.metric("🕒 آخر تحديث", last_t)
+    with as3:
+        if automation_manager.next_run_time:
+            next_t = datetime.fromisoformat(automation_manager.next_run_time).strftime("%H:%M")
+            st.metric("⏲️ القادم", next_t)
+    
+    if automation_manager.is_running:
+        st.progress(automation_manager.progress, text="جاري تنفيذ دورة الأتمتة...")
+
+    # عرض نتائج آخر عملية كشط (سواء يدوية أو آليّة)
+    scraped_data = st.session_state.get("last_scraped_data")
+    if not scraped_data and os.path.exists("data/competitors_latest.csv"):
+        try:
+            scraped_df = pd.read_csv("data/competitors_latest.csv")
+            if not scraped_df.empty:
+                scraped_data = scraped_df.to_dict("records")
+        except: pass
+
+    if scraped_data:
+        with st.expander("🕷️ تفاصيل آخر منتجات مكشوطة", expanded=True):
+            scraped_df = pd.DataFrame(scraped_data)
+            # ملخص سريع
+            ms1, ms2, ms3 = st.columns(3)
+            ms1.metric("📦 إجمالي المنتجات", f"{len(scraped_df)}")
+            ms2.metric("🏷️ الماركات المكتشفة", f"{scraped_df['الماركة'].nunique() if 'الماركة' in scraped_df.columns else scraped_df['brand'].nunique() if 'brand' in scraped_df.columns else 0}")
+            ms3.metric("💰 متوسط الأسعار", f"{scraped_df['السعر'].mean() if 'السعر' in scraped_df.columns else scraped_df['price'].mean() if 'price' in scraped_df.columns else 0:.0f} ر.س")
+            
+            # جدول مختصر بدقة
+            d_cols = ["اسم المنتج", "السعر", "الماركة", "sku", "رابط_المنتج"]
+            d_cols_alt = ["name", "price", "brand", "sku", "comp_url"]
+            actual_cols = [c for c in d_cols if c in scraped_df.columns] or [c for c in d_cols_alt if c in scraped_df.columns]
+            
+            st.dataframe(scraped_df[actual_cols].head(100), use_container_width=True, height=300)
+    st.markdown("---")
 
     if st.session_state.results:
         r = st.session_state.results
